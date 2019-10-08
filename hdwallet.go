@@ -196,7 +196,7 @@ func (w *Wallet) Derive(path accounts.DerivationPath, pin bool) (accounts.Accoun
 // user used previously (based on the chain state), but ones that he/she did not
 // explicitly pin to the wallet manually. To avoid chain head monitoring, self
 // derivation only runs during account listing (and even then throttled).
-func (w *Wallet) SelfDerive(base accounts.DerivationPath, chain ethereum.ChainStateReader) {
+func (w *Wallet) SelfDerive(base []accounts.DerivationPath, chain ethereum.ChainStateReader) {
 	// TODO: self derivation
 }
 
@@ -214,6 +214,41 @@ func (w *Wallet) SignHash(account accounts.Account, hash []byte) ([]byte, error)
 	}
 
 	return crypto.Sign(hash, privateKey)
+}
+
+// SignTxEIP155 implements accounts.Wallet, which allows the account to sign an ERC-20 transaction.
+func (w *Wallet) SignTxEIP155(account accounts.Account, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	w.stateLock.RLock() // Comms have own mutex, this is for the state fields
+	defer w.stateLock.RUnlock()
+
+	// Make sure the requested account is contained within
+	path, ok := w.paths[account.Address]
+	if !ok {
+		return nil, accounts.ErrUnknownAccount
+	}
+
+	privateKey, err := w.derivePrivateKey(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sign the transaction and verify the sender to avoid hardware fault surprises
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := signedTx.AsMessage(types.NewEIP155Signer(chainID))
+	if err != nil {
+		return nil, err
+	}
+
+	sender := msg.From()
+	if sender != account.Address {
+		return nil, fmt.Errorf("signer mismatch: expected %s, got %s", account.Address.Hex(), sender.Hex())
+	}
+
+	return signedTx, nil
 }
 
 // SignTx implements accounts.Wallet, which allows the account to sign an Ethereum transaction.
@@ -355,6 +390,49 @@ func (w *Wallet) AddressHex(account accounts.Account) (string, error) {
 // Path return the derivation path of the account.
 func (w *Wallet) Path(account accounts.Account) (string, error) {
 	return account.URL.Path, nil
+}
+
+// SignData signs keccak256(data). The mimetype parameter describes the type of data being signed
+func (w *Wallet) SignData(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
+	// Make sure the requested account is contained within
+	if !w.Contains(account) {
+		return nil, accounts.ErrUnknownAccount
+	}
+
+	return w.SignHash(account, crypto.Keccak256(data))
+}
+
+// SignDataWithPassphrase signs keccak256(data). The mimetype parameter describes the type of data being signed
+func (w *Wallet) SignDataWithPassphrase(account accounts.Account, passphrase, mimeType string, data []byte) ([]byte, error) {
+	// Make sure the requested account is contained within
+	if !w.Contains(account) {
+		return nil, accounts.ErrUnknownAccount
+	}
+
+	return w.SignHashWithPassphrase(account, passphrase, crypto.Keccak256(data))
+}
+
+// SignText requests the wallet to sign the hash of a given piece of data, prefixed
+// the needed details via SignHashWithPassphrase, or by other means (e.g. unlock
+// the account in a keystore).
+func (w *Wallet) SignText(account accounts.Account, text []byte) ([]byte, error) {
+	// Make sure the requested account is contained within
+	if !w.Contains(account) {
+		return nil, accounts.ErrUnknownAccount
+	}
+
+	return w.SignHash(account, accounts.TextHash(text))
+}
+
+// SignTextWithPassphrase implements accounts.Wallet, attempting to sign the
+// given text (which is hashed) with the given account using passphrase as extra authentication.
+func (w *Wallet) SignTextWithPassphrase(account accounts.Account, passphrase string, text []byte) ([]byte, error) {
+	// Make sure the requested account is contained within
+	if !w.Contains(account) {
+		return nil, accounts.ErrUnknownAccount
+	}
+
+	return w.SignHashWithPassphrase(account, passphrase, accounts.TextHash(text))
 }
 
 // ParseDerivationPath parses the derivation path in string format into []uint32
