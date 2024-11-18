@@ -238,12 +238,11 @@ func (w *Wallet) SignTxEIP155(account accounts.Account, tx *types.Transaction, c
 		return nil, err
 	}
 
-	msg, err := signedTx.AsMessage(types.NewEIP155Signer(chainID), baseFee)
+	sender, err := types.Sender(types.NewEIP155Signer(chainID), signedTx)
 	if err != nil {
 		return nil, err
 	}
 
-	sender := msg.From()
 	if sender != account.Address {
 		return nil, fmt.Errorf("signer mismatch: expected %s, got %s", account.Address.Hex(), sender.Hex())
 	}
@@ -273,12 +272,11 @@ func (w *Wallet) SignTx(account accounts.Account, tx *types.Transaction, chainID
 		return nil, err
 	}
 
-	msg, err := signedTx.AsMessage(types.HomesteadSigner{}, baseFee)
+	sender, err := types.Sender(types.HomesteadSigner{}, signedTx)
 	if err != nil {
 		return nil, err
 	}
 
-	sender := msg.From()
 	if sender != account.Address {
 		return nil, fmt.Errorf("signer mismatch: expected %s, got %s", account.Address.Hex(), sender.Hex())
 	}
@@ -481,7 +479,7 @@ func (w *Wallet) derivePrivateKey(path accounts.DerivationPath) (*ecdsa.PrivateK
 	var err error
 	key := w.masterKey
 	for _, n := range path {
-		key, err = key.Child(n)
+		key, err = key.Derive(n)
 		if err != nil {
 			return nil, err
 		}
